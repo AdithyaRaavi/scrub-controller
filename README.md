@@ -1,6 +1,6 @@
 # 🧽🖱️ Scrub Controller
 
-### A mouse. Inside a scrubber. For science. And for Dave.
+### A mouse. Inside a scrubber. For science. And for Adithya.
 
 > **TL;DR:** We put a mouse inside a dish scrubber so a husband could game and do chores at the exact same time, using the exact same motion. Scrub harder, go faster. His wife never has to know he spent the whole wash cycle in 1st place.
 
@@ -8,13 +8,13 @@
 
 ## 🍽️ The Origin Story
 
-Meet **Dave**. Every hackathon team needs a cautionary tale, and Dave is ours.
+Meet **Adithya**. Every hackathon team needs a cautionary tale, and Adithya is ours.
 
-Dave's hobbies, in order of time invested: gaming, thinking about gaming, and explaining to his wife why the sink still looks like a crime scene. Dave's wife, **Priya**, is a senior software engineer. She ships production code before 9am, reviews pull requests on her commute, and has approximately zero tolerance for a sink full of crusty plates when she gets home. Every evening ends the same way — Priya walks in, surveys the kitchen, and Dave receives a performance review so brutal it makes his actual quarterly review look like a thank-you card. No dishes done means no peace in the house. Everyone in the building has heard it. The neighbors have opinions.
+Adithya's hobbies, in order of time invested: gaming, thinking about gaming, and explaining to his wife why the sink still looks like a crime scene. Adithya's wife, **Lana Daal Rey**, is a senior software engineer. She ships production code before 9am, reviews pull requests on her commute, and has approximately zero tolerance for a sink full of crusty plates when she gets home. Every evening ends the same way — Lana Daal Rey walks in, surveys the kitchen, and Adithya receives a performance review so brutal it makes his actual quarterly review look like a thank-you card. No dishes done means no peace in the house. Everyone in the building has heard it. The neighbors have opinions.
 
-One night, mid-boss-fight, Dave heard Priya's key in the door and had approximately four seconds to make a life-altering decision: pause the game and do the dishes like a responsible adult, or don't, and accept his fate.
+One night, mid-boss-fight, Adithya heard Lana Daal Rey's key in the door and had approximately four seconds to make a life-altering decision: pause the game and do the dishes like a responsible adult, or don't, and accept his fate.
 
-Dave chose a third option. Dave chose **science**.
+Adithya chose a third option. Adithya chose **science**.
 
 What, he wondered, if the dishes *were* the game? What if the exact motion his wife already yells at him to do — scrubbing a plate, back and forth, back and forth — could *also* be the thing driving his car around a circuit at 300 km/h? He wouldn't be skipping chores to play games. He'd be doing chores *by* playing games. Flawless. Un-nagging-able. A loophole so clean it practically does the dishes itself.
 
@@ -91,13 +91,13 @@ No install, no build step — it's one HTML file.
 ## 🗺️ Roadmap
 
 - [ ] Waterproof the sensor properly (current prototype is "optimistically sealed")
-- [ ] Bluetooth version so Dave doesn't trip over a USB cable mid-race
+- [ ] Bluetooth version so Adithya doesn't trip over a USB cable mid-race
 - [ ] Leaderboard synced to actual dish count, for accountability
-- [ ] A companion scrubber for Priya, because competitive multiplayer chores sounds incredible
-- [ ] Ask Priya for her honest review of this README
+- [ ] A companion scrubber for Lana Daal Rey, because competitive multiplayer chores sounds incredible
+- [ ] Ask Lana Daal Rey for her honest review of this README
 
 ---
 
 ## ⚖️ License
 
-MIT — see [`LICENSE`](./LICENSE). Use it, remix it, build your own chore-powered controller. If your spouse asks, tell them it was Dave's idea.
+MIT — see [`LICENSE`](./LICENSE). Use it, remix it, build your own chore-powered controller. If your spouse asks, tell them it was Adithya's idea.

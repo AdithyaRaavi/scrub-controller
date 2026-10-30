@@ -467,7 +467,8 @@
     var bow = new THREE.Mesh(new THREE.ConeGeometry(0.58,1.1,4), hullMat);
     bow.rotation.x = Math.PI/2; bow.rotation.y = Math.PI/4; bow.position.set(0,0.2,-1.75); group.add(bow);
     var rowerMat = new THREE.MeshStandardMaterial({ color:0x2a2a33, roughness:0.7 });
-    var rower = new THREE.Mesh(new THREE.CapsuleGeometry(0.22,0.5,4,8), rowerMat); rower.position.set(0,0.6,0.1); group.add(rower);
+    var rower = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.9,8), rowerMat); rower.position.set(0,0.6,0.1); group.add(rower);
+    var rowerHead = new THREE.Mesh(new THREE.SphereGeometry(0.2,8,8), rowerMat); rowerHead.position.set(0,1.05,0.1); group.add(rowerHead);
     group.userData.bodyMat = hullMat;
     return group;
   }
@@ -477,7 +478,7 @@
     var suitMat = new THREE.MeshStandardMaterial({ color: shadeHex(colorHex,0), roughness:0.5 });
     var skiMat = new THREE.MeshStandardMaterial({ color:0x1b1b22, roughness:0.4 });
     var skinMat = new THREE.MeshStandardMaterial({ color:0xe8b894, roughness:0.8 });
-    var body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28,0.6,4,8), suitMat); body.position.y=0.95; group.add(body);
+    var body = new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.28,1.0,8), suitMat); body.position.y=0.95; group.add(body);
     var head = new THREE.Mesh(new THREE.SphereGeometry(0.2,10,10), skinMat); head.position.y=1.5; group.add(head);
     [-1,1].forEach(function(s){
       var ski = new THREE.Mesh(new THREE.BoxGeometry(0.16,0.05,1.5), skiMat);
@@ -496,7 +497,8 @@
     var screenMat = new THREE.MeshStandardMaterial({ color:0x9fd0ff, transparent:true, opacity:0.5 });
     var screen = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.3,0.06), screenMat); screen.position.set(0,0.55,-0.5); group.add(screen);
     var riderMat = new THREE.MeshStandardMaterial({ color:0x202028, roughness:0.7 });
-    var rider = new THREE.Mesh(new THREE.CapsuleGeometry(0.2,0.45,4,8), riderMat); rider.position.set(0,0.75,0.1); group.add(rider);
+    var rider = new THREE.Mesh(new THREE.CylinderGeometry(0.2,0.2,0.8,8), riderMat); rider.position.set(0,0.75,0.1); group.add(rider);
+    var riderHead = new THREE.Mesh(new THREE.SphereGeometry(0.18,8,8), riderMat); riderHead.position.set(0,1.15,0.1); group.add(riderHead);
     group.userData.bodyMat = hullMat;
     return group;
   }

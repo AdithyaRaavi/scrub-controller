@@ -1,0 +1,920 @@
+<!doctype html>
+<title>Scrub Arcade</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* layout: one arcade cabinet shell — a menu of game cards, then a single shared
+     3D stage (one WebGL renderer, a chase camera, a fresh scene per game) that
+     swaps in whichever game is active. Every game reads the SAME controller:
+     cursor position steers, scrubbing the mouse back and forth (the motion of
+     scouring something with a scrubber) is the power input. */
+  :root{
+    --bg:#140f2e;
+    --panel:#1d1640;
+    --panel2:#241a4e;
+    --line:#443a74;
+    --accent:#ff3d81;   /* marquee pink — player / power */
+    --accent2:#00e3c4;  /* arcade teal — HUD / steer */
+    --fg:#f3eeff;
+    --muted:#9b90c4;
+    --font-display:'Chakra Petch',-apple-system,sans-serif;
+    --font-body:'Work Sans',-apple-system,sans-serif;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#eeebf7; --panel:#ffffff; --panel2:#f1edfb; --line:#d6cdef;
+      --fg:#1b1533; --muted:#6c6190;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#eeebf7; --panel:#ffffff; --panel2:#f1edfb; --line:#d6cdef;
+    --fg:#1b1533; --muted:#6c6190;
+    color-scheme: light;
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:var(--font-body);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 16px;
+    display:flex; flex-direction:column; align-items:center; gap:14px;
+    min-height: calc(100% - 32px);
+  }
+
+  .masthead{ text-align:center; max-width:720px; }
+  h1{
+    font-family:var(--font-display); font-weight:700;
+    font-size:clamp(1.5rem, 4.5vw, 2.1rem);
+    margin:0; letter-spacing:0.02em; text-wrap:balance;
+  }
+  .masthead p{ margin:6px 0 0; color:var(--muted); font-size:0.92rem; line-height:1.5; }
+  .masthead b{ color:var(--fg); }
+
+  .wrap{ width:100%; max-width:720px; }
+
+  .cards{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px,1fr)); gap:12px; }
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    padding:16px; display:flex; flex-direction:column; gap:8px; text-align:left;
+  }
+  .card .emoji{ font-size:1.8rem; line-height:1; }
+  .card h3{ font-family:var(--font-display); margin:0; font-size:1.05rem; font-weight:700; }
+  .card p{ margin:0; color:var(--muted); font-size:0.85rem; line-height:1.4; flex:1; }
+  .card button{ align-self:flex-start; }
+
+  button{
+    font-family:var(--font-display); font-weight:700; font-size:0.9rem;
+    letter-spacing:0.03em; text-transform:uppercase;
+    padding:10px 20px; border-radius:999px; border:none;
+    background:var(--accent); color:#2a0415; cursor:pointer;
+  }
+  button.ghost{ background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:hover{ filter:brightness(1.08); }
+  button:focus-visible{ outline:2px solid var(--accent2); outline-offset:3px; }
+
+  .rig{ display:none; width:100%; flex-direction:column; gap:0; border-radius:20px; overflow:hidden; border:1px solid var(--line); background:var(--panel); }
+  .rig.show{ display:flex; }
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:10px 16px; background:var(--panel2); border-bottom:1px solid var(--line); }
+  .topbar .gname{ font-family:var(--font-display); font-weight:700; font-size:0.95rem; }
+
+  .hud{
+    display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; gap:14px;
+    padding:10px 18px; background:color-mix(in srgb, var(--bg) 55%, var(--panel));
+    border-bottom:1px solid var(--line);
+  }
+  .hud-stat{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .hud-stat.right{ align-items:flex-end; }
+  .hud-label{ font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .hud-value{ font-family:var(--font-display); font-variant-numeric: tabular-nums; font-weight:700; font-size:1.15rem; }
+  .hud-value.accent{ color:var(--accent2); }
+  .dial-wrap{ display:flex; flex-direction:column; align-items:center; gap:3px; }
+  #dialGroup{ transform-origin:50% 50%; }
+
+  /* Default cursor stays visible everywhere on the stage — overlays, buttons, the
+     lot. It's hidden with .playing ONLY while a round is actually live, so the
+     pointer never vanishes while you're trying to read instructions or click Go. */
+  .stage{
+    position:relative; width:100%; aspect-ratio:3/4; max-height:72vh;
+    background:var(--bg); overflow:hidden;
+  }
+  .stage.playing{ cursor:none; }
+  .stage canvas{ display:block; width:100% !important; height:100% !important; }
+
+  .power-meter{
+    position:absolute; left: max(14px, env(safe-area-inset-left, 0px)); bottom:14px;
+    width:14px; height:120px; border-radius:8px;
+    background:color-mix(in srgb, #fff 14%, transparent);
+    overflow:hidden; z-index:4;
+  }
+  .power-fill{ position:absolute; left:0; bottom:0; width:100%; height:0%; background:linear-gradient(180deg, var(--accent2), var(--accent)); transition:height 60ms linear; }
+
+  .toast{
+    position:absolute; top:14px; left:50%; transform:translate(-50%,-14px);
+    font-family:var(--font-display); font-weight:700; font-size:1rem;
+    background:color-mix(in srgb, var(--accent2) 88%, transparent); color:#031c17;
+    padding:7px 16px; border-radius:999px; opacity:0;
+    transition:opacity .35s ease, transform .35s ease; pointer-events:none; z-index:5;
+  }
+  .toast.show{ opacity:1; transform:translate(-50%,0); }
+
+  .overlay{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:12px; text-align:center; padding:24px;
+    background:color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(2px); z-index:6;
+  }
+  .overlay[hidden]{ display:none; }
+  .overlay h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.3rem,6vw,1.9rem); margin:0; }
+  .overlay p{ margin:0; max-width:40ch; color:var(--muted); font-size:0.95rem; line-height:1.5; }
+  .overlay .big{ font-family:var(--font-display); font-size:clamp(1.8rem,8vw,2.6rem); font-weight:700; color:var(--accent2); }
+  .btnrow{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+
+  .standings{ width:100%; max-width:300px; display:flex; flex-direction:column; gap:6px; font-size:0.88rem; }
+  .standings .row{ display:flex; align-items:center; gap:10px; padding:6px 10px; border-radius:10px; background:color-mix(in srgb, var(--fg) 7%, transparent); }
+  .standings .row.me{ background:color-mix(in srgb, var(--accent2) 26%, transparent); font-weight:800; }
+  .standings .rank{ color:var(--muted); width:1.8em; font-family:var(--font-display); }
+  .standings .name{ flex:1; text-align:left; }
+  .standings .gap{ color:var(--muted); font-variant-numeric: tabular-nums; font-size:0.82rem; }
+
+  @media (prefers-reduced-motion: reduce){ #dialGroup{ transition:none; } .toast{ transition:none; } }
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Work+Sans:wght@500;600;700&display=swap">
+
+<div class="masthead">
+  <h1>Scrub Arcade</h1>
+  <p>One control, four games, all in 3D. <b>Drag left or right</b> to steer — wherever the cursor sits is the direction. <b>Scrub it back and forth, fast,</b> anywhere on the stage and that's your power — like working a scrubber. Ease off and you lose speed. No keyboard, ever.</p>
+</div>
+
+<div class="wrap" id="hub">
+  <div class="cards">
+    <div class="card">
+      <div class="emoji">🏎️</div>
+      <h3>Redline Circuit</h3>
+      <p>Five cars, five laps, one night circuit. Chase-cam 3D racing against four rivals who fight you for every corner.</p>
+      <button type="button" data-game="car">Play</button>
+    </div>
+    <div class="card">
+      <div class="emoji">🚣</div>
+      <h3>River Row Sprint</h3>
+      <p>Steer your boat down a winding 3D river and out-paddle three rivals to the flag. Dodge logs, clip buoys for a kick.</p>
+      <button type="button" data-game="row">Play</button>
+    </div>
+    <div class="card">
+      <div class="emoji">⛷️</div>
+      <h3>Slope Rush</h3>
+      <p>Carve a real downhill run against two rival skiers through a 3D mountain. Dodge trees and moguls or eat a crash penalty.</p>
+      <button type="button" data-game="ski">Play</button>
+    </div>
+    <div class="card">
+      <div class="emoji">🌊</div>
+      <h3>Slalom Jet Ski</h3>
+      <p>Thread 14 buoy gates across open 3D water against two rivals. Miss a gate and the clock punishes you.</p>
+      <button type="button" data-game="jet">Play</button>
+    </div>
+  </div>
+</div>
+
+<div class="rig" id="rig">
+  <div class="topbar">
+    <span class="gname" id="gameName">—</span>
+    <button class="ghost" type="button" id="backBtn">&larr; Arcade</button>
+  </div>
+  <div class="hud">
+    <div class="hud-stat">
+      <span class="hud-label" id="leftLabel">Progress</span>
+      <span class="hud-value" id="leftVal">0 m</span>
+    </div>
+    <div class="dial-wrap">
+      <svg width="48" height="48" viewBox="0 0 52 52" aria-hidden="true">
+        <circle cx="26" cy="26" r="22" fill="none" stroke="var(--muted)" stroke-width="2" opacity="0.4"/>
+        <g id="dialGroup">
+          <circle cx="26" cy="26" r="20" fill="none" stroke="var(--accent2)" stroke-width="3"/>
+          <line x1="26" y1="8" x2="26" y2="18" stroke="var(--accent2)" stroke-width="3" stroke-linecap="round"/>
+          <line x1="10" y1="26" x2="18" y2="26" stroke="var(--accent2)" stroke-width="3" stroke-linecap="round"/>
+          <line x1="34" y1="26" x2="42" y2="26" stroke="var(--accent2)" stroke-width="3" stroke-linecap="round"/>
+        </g>
+      </svg>
+      <span class="hud-label">Steer</span>
+    </div>
+    <div class="hud-stat right">
+      <span class="hud-label" id="rightLabel">Position</span>
+      <span class="hud-value accent" id="rightVal">—</span>
+    </div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="power-meter"><div class="power-fill" id="powerFill"></div></div>
+    <div class="toast" id="toast">—</div>
+
+    <div class="overlay" id="startOverlay">
+      <h2 id="startTitle">Game</h2>
+      <p id="startText">Instructions.</p>
+      <button type="button" id="startBtn">Go</button>
+    </div>
+
+    <div class="overlay" id="finishOverlay" hidden>
+      <h2 id="finishTitle">Finished</h2>
+      <div class="big" id="finishBig">—</div>
+      <p id="finishLine">—</p>
+      <div class="standings" id="standings"></div>
+      <div class="btnrow">
+        <button type="button" id="retryBtn">Again</button>
+        <button class="ghost" type="button" id="exitBtn">&larr; Arcade</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  "use strict";
+  if (typeof THREE === 'undefined') return;
+
+  // ============ shared DOM ============
+  var hub = document.getElementById('hub');
+  var rig = document.getElementById('rig');
+  var stage = document.getElementById('stage');
+  var gameName = document.getElementById('gameName');
+  var leftLabel = document.getElementById('leftLabel');
+  var leftVal = document.getElementById('leftVal');
+  var rightLabel = document.getElementById('rightLabel');
+  var rightVal = document.getElementById('rightVal');
+  var dialGroup = document.getElementById('dialGroup');
+  var powerFill = document.getElementById('powerFill');
+  var toastEl = document.getElementById('toast');
+  var startOverlay = document.getElementById('startOverlay');
+  var startTitle = document.getElementById('startTitle');
+  var startText = document.getElementById('startText');
+  var startBtn = document.getElementById('startBtn');
+  var finishOverlay = document.getElementById('finishOverlay');
+  var finishTitle = document.getElementById('finishTitle');
+  var finishBig = document.getElementById('finishBig');
+  var finishLine = document.getElementById('finishLine');
+  var standingsEl = document.getElementById('standings');
+  var retryBtn = document.getElementById('retryBtn');
+  var exitBtn = document.getElementById('exitBtn');
+  var backBtn = document.getElementById('backBtn');
+
+  function ordinal(n){ var s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
+  function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function showToast(text){
+    toastEl.textContent = text; toastEl.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function(){ toastEl.classList.remove('show'); }, 1500);
+  }
+  function setPlaying(on){ stage.classList.toggle('playing', !!on); }
+
+  // ============ single shared renderer + camera ============
+  var W=1, H=1, DPR = Math.min(window.devicePixelRatio||1, 2);
+  var renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setPixelRatio(DPR);
+  stage.appendChild(renderer.domElement);
+  var camera = new THREE.PerspectiveCamera(58, 1, 0.1, 700);
+
+  function resize(){
+    var r = stage.getBoundingClientRect();
+    W = Math.max(1, r.width); H = Math.max(1, r.height);
+    renderer.setSize(W, H, false);
+    camera.aspect = W/H; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+
+  // ============ shared controller: position steers, scrub strokes power ============
+  var mouse = { haveInput:false, lastX:null, lastT:0, smoothV:0, sign:0, peak:0, steerTarget:0.5 };
+  var powerFlash = 0;
+  function onPointerMove(clientX){
+    var r = stage.getBoundingClientRect();
+    var x = clientX - r.left;
+    mouse.steerTarget = Math.max(0, Math.min(1, x/Math.max(1,r.width)));
+    mouse.haveInput = true;
+    var t = performance.now();
+    if (mouse.lastX === null){ mouse.lastX=x; mouse.lastT=t; return; }
+    var dt = Math.max(8, t-mouse.lastT);
+    var v = (x-mouse.lastX)/dt;
+    mouse.lastX = x; mouse.lastT = t;
+    mouse.smoothV = mouse.smoothV*0.65 + v*0.35;
+    var av = Math.abs(mouse.smoothV);
+    if (av > mouse.peak) mouse.peak = av;
+    var s = mouse.smoothV>0.02 ? 1 : (mouse.smoothV<-0.02 ? -1 : 0);
+    if (s!==0 && mouse.sign!==0 && s!==mouse.sign){
+      var strokeSpeed = Math.min(mouse.peak, 3.2);
+      if (strokeSpeed > 0.1 && active && active.running){
+        active.onStroke(strokeSpeed);
+        powerFlash = Math.min(1, strokeSpeed/1.6);
+      }
+      mouse.peak = 0;
+    }
+    if (s!==0) mouse.sign = s;
+  }
+  stage.addEventListener('mousemove', function(e){ onPointerMove(e.clientX); });
+  stage.addEventListener('touchmove', function(e){
+    if (e.touches && e.touches[0]){ onPointerMove(e.touches[0].clientX); e.preventDefault(); }
+  }, {passive:false});
+
+  // ============ generic 3D course engine ============
+  var UP = new THREE.Vector3(0,1,0);
+
+  function curveSampler(curve){
+    return {
+      point: function(t){ return curve.getPointAt(Math.max(0, Math.min(1, t))); },
+      tangent: function(t){ return curve.getTangentAt(Math.max(0, Math.min(1, t))).normalize(); },
+      right: function(t){ return this.tangent(t).clone().cross(UP).normalize(); }
+    };
+  }
+
+  // lateralFrac: 0..1 across the course width. Returns the world position used.
+  function placeOnCourse(mesh, sampler, t, lateralFrac, halfWidth, bank){
+    var p = sampler.point(t);
+    var right = sampler.right(t);
+    var tang = sampler.tangent(t);
+    var lateral = (lateralFrac-0.5) * halfWidth * 1.5;
+    var pos = p.clone().addScaledVector(right, lateral);
+    mesh.position.copy(pos);
+    mesh.up.set(0,1,0);
+    mesh.lookAt(pos.clone().add(tang));
+    mesh.rotation.z += bank || 0;
+    return pos;
+  }
+
+  function addStandardLights(scene, sunHex){
+    var hemi = new THREE.HemisphereLight(0x9fc3ff, 0x101a14, 0.8);
+    scene.add(hemi);
+    var sun = new THREE.DirectionalLight(sunHex || 0xffe9c7, 1.0);
+    sun.position.set(40,60,20);
+    scene.add(sun);
+    var fill = new THREE.PointLight(0x52a6ff, 0.5, 200);
+    fill.position.set(0,30,0);
+    scene.add(fill);
+    return { hemi:hemi, sun:sun, fill:fill };
+  }
+
+  function buildGround(scene, size, colorHex){
+    var ground = new THREE.Mesh(new THREE.PlaneGeometry(size,size), new THREE.MeshStandardMaterial({ color:colorHex, roughness:1 }));
+    ground.rotation.x = -Math.PI/2;
+    ground.position.y = -0.08;
+    scene.add(ground);
+    return ground;
+  }
+
+  // builds the ribbon surface (track / river / slope / water) following the curve
+  function buildCourseSurface(scene, curve, sampler, segments, halfWidth, colorHex, roughness){
+    var positions=[], uvs=[], indices=[];
+    for (var i=0;i<=segments;i++){
+      var t = i/segments;
+      var p = sampler.point(t), right = sampler.right(t);
+      var inner = p.clone().addScaledVector(right, -halfWidth);
+      var outer = p.clone().addScaledVector(right, halfWidth);
+      positions.push(inner.x, inner.y+0.02, inner.z, outer.x, outer.y+0.02, outer.z);
+      uvs.push(0,i*0.25, 1,i*0.25);
+    }
+    for (var j=0;j<segments;j++){
+      var a=j*2,b=j*2+1,c=(j+1)*2,d=(j+1)*2+1;
+      indices.push(a,c,b, c,d,b);
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs,2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    var mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color:colorHex, roughness: roughness===undefined?0.9:roughness }));
+    scene.add(mesh);
+    return mesh;
+  }
+
+  function scatterDecor(scene, sampler, segments, halfWidth, factoryFn, count){
+    for (var i=0;i<count;i++){
+      var t = 0.03 + Math.random()*0.94;
+      var side = Math.random()<0.5 ? -1 : 1;
+      var p = sampler.point(t), right = sampler.right(t), tang = sampler.tangent(t);
+      var lateral = side * (halfWidth*(1.25 + Math.random()*1.4));
+      var pos = p.clone().addScaledVector(right, lateral);
+      var mesh = factoryFn();
+      mesh.position.copy(pos);
+      mesh.lookAt(pos.clone().add(tang));
+      scene.add(mesh);
+    }
+  }
+
+  function roundRect(c,x,y,w,h,r){
+    c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+    c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+  }
+
+  function rankAndGap(mineProgress, rivals){
+    var field = rivals.map(function(r){ return {name:r.name, progress:r.progress, me:false}; });
+    field.push({name:'You', progress:mineProgress, me:true});
+    field.sort(function(a,b){ return b.progress-a.progress; });
+    var idx=0; for (var i=0;i<field.length;i++) if (field[i].me) idx=i;
+    return { rank: idx+1, gapAhead: idx>0 ? field[idx-1].progress-mineProgress : 0, field: field };
+  }
+  function renderStandings(field){
+    var leader = field[0].progress;
+    standingsEl.innerHTML = field.map(function(r, idx){
+      var g = idx===0 ? 'Leader' : ('-'+Math.round(leader-r.progress)+'m');
+      return '<div class="row'+(r.me?' me':'')+'"><span class="rank">'+ordinal(idx+1)+'</span>'+
+             '<span class="name">'+r.name+'</span><span class="gap">'+g+'</span></div>';
+    }).join('');
+  }
+
+  function updateChaseCam(vehiclePos, tangent, backDist, height, lookAhead, dt){
+    var camOffset = tangent.clone().multiplyScalar(-backDist).add(new THREE.Vector3(0,height,0));
+    var camTarget = vehiclePos.clone().add(camOffset);
+    camera.position.lerp(camTarget, Math.min(1, dt*4));
+    var lookPos = vehiclePos.clone().add(tangent.clone().multiplyScalar(lookAhead)).add(new THREE.Vector3(0,1,0));
+    camera.lookAt(lookPos);
+  }
+
+  // ============ vehicle factories ============
+  function shadeHex(hex, amt){
+    var c = new THREE.Color(hex);
+    if (amt>=0){ c.lerp(new THREE.Color(0xffffff), amt); } else { c.multiplyScalar(1+amt); }
+    return c;
+  }
+
+  function createCar(colorHex){
+    var group = new THREE.Group();
+    var bodyMat = new THREE.MeshStandardMaterial({ color: shadeHex(colorHex,0), metalness:0.55, roughness:0.35 });
+    var darkMat = new THREE.MeshStandardMaterial({ color:0x0c0e14, roughness:0.6 });
+    var glassMat = new THREE.MeshStandardMaterial({ color:0x9fd0ff, roughness:0.15, transparent:true, opacity:0.55 });
+    var wheelMat = new THREE.MeshStandardMaterial({ color:0x15151a, roughness:0.9 });
+    var lightMat = new THREE.MeshStandardMaterial({ color:0xfff4cf, emissive:0xfff4cf, emissiveIntensity:1.2 });
+    var tailMat = new THREE.MeshStandardMaterial({ color:0xff3b3b, emissive:0xff3b3b, emissiveIntensity:1.0 });
+
+    var body = new THREE.Mesh(new THREE.BoxGeometry(2.1,0.55,4.2), bodyMat); body.position.y=0.45; group.add(body);
+    var nose = new THREE.Mesh(new THREE.BoxGeometry(1.7,0.4,0.9), bodyMat); nose.position.set(0,0.35,-2.3); group.add(nose);
+    var cabin = new THREE.Mesh(new THREE.BoxGeometry(1.3,0.5,2.0), darkMat); cabin.position.set(0,0.85,0.1); group.add(cabin);
+    var wshield = new THREE.Mesh(new THREE.BoxGeometry(1.25,0.4,0.9), glassMat); wshield.position.set(0,0.85,-0.8); group.add(wshield);
+    var wheelGeo = new THREE.CylinderGeometry(0.42,0.42,0.34,14);
+    [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(function(p){
+      var w = new THREE.Mesh(wheelGeo, wheelMat); w.rotation.z = Math.PI/2; w.position.set(p[0]*1.15,0.42,p[1]*1.5); group.add(w);
+    });
+    var hL = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.14,0.1), lightMat); hL.position.set(-0.6,0.45,-2.75); group.add(hL);
+    var hR = hL.clone(); hR.position.x=0.6; group.add(hR);
+    var tL = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.16,0.08), tailMat); tL.position.set(-0.7,0.55,2.15); group.add(tL);
+    var tR = tL.clone(); tR.position.x=0.7; group.add(tR);
+    group.userData.bodyMat = bodyMat;
+    return group;
+  }
+
+  function createBoat(colorHex){
+    var group = new THREE.Group();
+    var hullMat = new THREE.MeshStandardMaterial({ color: shadeHex(colorHex,0), roughness:0.5 });
+    var hull = new THREE.Mesh(new THREE.BoxGeometry(1.1,0.4,3.2), hullMat); hull.position.y=0.2; group.add(hull);
+    var bow = new THREE.Mesh(new THREE.ConeGeometry(0.58,1.1,4), hullMat);
+    bow.rotation.x = Math.PI/2; bow.rotation.y = Math.PI/4; bow.position.set(0,0.2,-1.75); group.add(bow);
+    var rowerMat = new THREE.MeshStandardMaterial({ color:0x2a2a33, roughness:0.7 });
+    var rower = new THREE.Mesh(new THREE.CapsuleGeometry(0.22,0.5,4,8), rowerMat); rower.position.set(0,0.6,0.1); group.add(rower);
+    group.userData.bodyMat = hullMat;
+    return group;
+  }
+
+  function createSkier(colorHex){
+    var group = new THREE.Group();
+    var suitMat = new THREE.MeshStandardMaterial({ color: shadeHex(colorHex,0), roughness:0.5 });
+    var skiMat = new THREE.MeshStandardMaterial({ color:0x1b1b22, roughness:0.4 });
+    var skinMat = new THREE.MeshStandardMaterial({ color:0xe8b894, roughness:0.8 });
+    var body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28,0.6,4,8), suitMat); body.position.y=0.95; group.add(body);
+    var head = new THREE.Mesh(new THREE.SphereGeometry(0.2,10,10), skinMat); head.position.y=1.5; group.add(head);
+    [-1,1].forEach(function(s){
+      var ski = new THREE.Mesh(new THREE.BoxGeometry(0.16,0.05,1.5), skiMat);
+      ski.position.set(s*0.2,0.1,0.1); group.add(ski);
+    });
+    group.userData.bodyMat = suitMat;
+    return group;
+  }
+
+  function createJetski(colorHex){
+    var group = new THREE.Group();
+    var hullMat = new THREE.MeshStandardMaterial({ color: shadeHex(colorHex,0), metalness:0.3, roughness:0.4 });
+    var hull = new THREE.Mesh(new THREE.BoxGeometry(1.0,0.4,2.6), hullMat); hull.position.y=0.25; group.add(hull);
+    var nose = new THREE.Mesh(new THREE.ConeGeometry(0.5,0.9,4), hullMat);
+    nose.rotation.x = Math.PI/2; nose.rotation.y = Math.PI/4; nose.position.set(0,0.25,-1.5); group.add(nose);
+    var screenMat = new THREE.MeshStandardMaterial({ color:0x9fd0ff, transparent:true, opacity:0.5 });
+    var screen = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.3,0.06), screenMat); screen.position.set(0,0.55,-0.5); group.add(screen);
+    var riderMat = new THREE.MeshStandardMaterial({ color:0x202028, roughness:0.7 });
+    var rider = new THREE.Mesh(new THREE.CapsuleGeometry(0.2,0.45,4,8), riderMat); rider.position.set(0,0.75,0.1); group.add(rider);
+    group.userData.bodyMat = hullMat;
+    return group;
+  }
+
+  // small obstacle/decor factories
+  function makeLog(){ var m=new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.35,2.2,10), new THREE.MeshStandardMaterial({color:0x6b4a2b, roughness:0.9})); m.rotation.z=Math.PI/2; m.position.y=0.3; return m; }
+  function makeBuoy(litColor){ var g=new THREE.Group(); var ball=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,10), new THREE.MeshStandardMaterial({color:litColor||0xffcf3f, emissive:litColor||0x442e00, emissiveIntensity:0.3})); ball.position.y=0.45; g.add(ball); return g; }
+  function makeTree(){ var g=new THREE.Group();
+    var trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.2,0.9,8), new THREE.MeshStandardMaterial({color:0x6b4a2b, roughness:0.9})); trunk.position.y=0.45; g.add(trunk);
+    var leaves=new THREE.Mesh(new THREE.ConeGeometry(0.75,1.6,8), new THREE.MeshStandardMaterial({color:0x2f6b45, roughness:0.9})); leaves.position.y=1.3; g.add(leaves);
+    return g; }
+  function makeRock(){ var m=new THREE.Mesh(new THREE.IcosahedronGeometry(0.4,0), new THREE.MeshStandardMaterial({color:0xc3d0e8, roughness:0.95})); m.position.y=0.25; return m; }
+  function makeGateBuoy(color){ var g=new THREE.Group();
+    var pole=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,1.4,6), new THREE.MeshStandardMaterial({color:0xcccccc, roughness:0.6})); pole.position.y=0.7; g.add(pole);
+    var ball=new THREE.Mesh(new THREE.SphereGeometry(0.32,10,10), new THREE.MeshStandardMaterial({color:color, emissive:color, emissiveIntensity:0.4})); ball.position.y=1.3; g.add(ball);
+    g.userData.ball = ball;
+    return g; }
+  function makeGrandstand(colorHex){ return new THREE.Mesh(new THREE.BoxGeometry(10,5,3), new THREE.MeshStandardMaterial({color:colorHex, emissive: shadeHex(colorHex,-0.5), emissiveIntensity:0.4, roughness:0.6})); }
+  function makeStandingStone(){ var m=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.7,1.6,6), new THREE.MeshStandardMaterial({color:0x5a6b72, roughness:0.95})); m.position.y=0.8; return m; }
+
+  // ============================================================
+  // GAME: Redline Circuit (closed-loop laps)
+  // ============================================================
+  var Car = {
+    key:'car', title:'Redline Circuit', maxSpeed:95,
+    startText:'Five cars, five laps, one night circuit. Drag left/right to lean into the corner, scrub the mouse back and forth fast to feed the throttle. No keyboard.',
+    LAPS:5, halfWidth:9,
+    build:function(){
+      var scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0b0f17);
+      scene.fog = new THREE.Fog(0x0b0f17, 70, 260);
+      addStandardLights(scene, 0xffe9c7);
+      buildGround(scene, 900, 0x132018);
+      var ctrl = [ new THREE.Vector3(0,0,70), new THREE.Vector3(55,3,85), new THREE.Vector3(95,5,40),
+        new THREE.Vector3(90,2,-30), new THREE.Vector3(45,4,-65), new THREE.Vector3(-10,1,-55),
+        new THREE.Vector3(-55,0,-10), new THREE.Vector3(-45,2,40) ];
+      var curve = new THREE.CatmullRomCurve3(ctrl, true, 'catmullrom', 0.5);
+      var sampler = curveSampler(curve);
+      var len = curve.getLength();
+      buildCourseSurface(scene, curve, sampler, 260, this.halfWidth, 0x23262f, 0.95);
+      // lane dashes + curbs
+      var laneMat = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.9 });
+      var curbA = new THREE.MeshStandardMaterial({ color:0xd43b3b, roughness:0.8 });
+      var curbB = new THREE.MeshStandardMaterial({ color:0xe9e9e9, roughness:0.8 });
+      for (var k=0;k<260;k+=4){
+        var t2=k/260, p2=sampler.point(t2), tang=sampler.tangent(t2);
+        var dash = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.03,2.4), laneMat);
+        dash.position.copy(p2); dash.position.y+=0.04; dash.lookAt(p2.clone().add(tang)); scene.add(dash);
+      }
+      for (var m=0;m<260;m+=3){
+        var t3=m/260, p3=sampler.point(t3), right3=sampler.right(t3), tang3=sampler.tangent(t3);
+        [-1,1].forEach(function(side){
+          var pos = p3.clone().addScaledVector(right3, side*(9.6));
+          var curb = new THREE.Mesh(new THREE.BoxGeometry(1.1,0.18,2.2), (m/3)%2===0?curbA:curbB);
+          curb.position.copy(pos); curb.position.y+=0.07; curb.lookAt(pos.clone().add(tang3)); scene.add(curb);
+        });
+      }
+      scatterDecor(scene, sampler, 260, this.halfWidth, makeGrandstand.bind(null, 0x52a6ff), 5);
+      return { scene:scene, curve:curve, sampler:sampler, length:len };
+    },
+    initRound:function(course){
+      this.course = course; this.speed=24; this.steerX=0.5; this.progress=0; this.lapIndex=0;
+      var names=['Vega','Onyx','Halo','Blitz'], colors=[0xffd23f,0x52d6c6,0xb98bff,0xff9a52];
+      this.rivals = names.map(function(n,i){ return {name:n, base:52+i*4, phase:i*1.3, progress:6+i*4, lane:0.5, laneTarget:Math.random(), laneTimer:0.7+Math.random()*1.2, aggro:0.8+Math.random()*0.5}; });
+      this.playerMesh = createCar(cssVar('--accent')||'#ff3d81');
+      course.scene.add(this.playerMesh);
+      this.rivalMeshes = colors.map(function(c){ var m=createCar(c); course.scene.add(m); return m; });
+      this.TOTAL = this.LAPS*course.length;
+      this.scrapeFlash = 0;
+    },
+    onStroke:function(s){ this.speed = Math.min(this.maxSpeed, this.speed + s*15.5); },
+    update:function(dt, now){
+      this.speed *= Math.pow(0.55, dt); this.speed = Math.max(0, this.speed-6*dt);
+      if (mouse.haveInput) this.steerX += (mouse.steerTarget-this.steerX)*Math.min(1,dt*7);
+      var hitWall = this.steerX<=0.03||this.steerX>=0.97;
+      this.steerX = Math.max(0.02, Math.min(0.98, this.steerX));
+      if (hitWall) this.speed *= Math.pow(0.9, dt*60);
+      this.progress = Math.min(this.progress+this.speed*dt, this.TOTAL);
+      var newLap = Math.floor(this.progress/this.course.length);
+      if (newLap!==this.lapIndex){ this.lapIndex=newLap; if (newLap<this.LAPS) showToast('Lap '+(newLap+1)+' of '+this.LAPS); }
+      var latePush = this.lapIndex*2.2;
+      for (var i=0;i<this.rivals.length;i++){
+        var rv=this.rivals[i];
+        var band = Math.max(-42, Math.min(42,(this.progress-rv.progress)*0.68))*rv.aggro;
+        var spd = Math.max(20, rv.base+band+Math.sin(now*0.0006+rv.phase)*8+latePush);
+        rv.progress = Math.min(rv.progress+spd*dt, this.TOTAL);
+        rv.laneTimer -= dt;
+        if (rv.laneTimer<=0){ rv.laneTarget=0.12+Math.random()*0.76; rv.laneTimer=0.7+Math.random()*1.3; }
+        if (Math.abs(rv.progress-this.progress)<9) rv.laneTarget = this.steerX>0.5?0.15:0.85;
+        rv.lane += (rv.laneTarget-rv.lane)*dt*1.1;
+      }
+      var rg = rankAndGap(this.progress, this.rivals); this.rank=rg.rank; this.gapAhead=rg.gapAhead;
+      if (rg.rank>1 && rg.gapAhead>0 && rg.gapAhead<12) this.speed = Math.min(this.maxSpeed, this.speed+(12-rg.gapAhead)*5.5*dt);
+
+      var playerT = (this.progress%this.course.length)/this.course.length;
+      var playerPos = placeOnCourse(this.playerMesh, this.course.sampler, playerT, this.steerX, this.halfWidth, (0.5-this.steerX)*0.18);
+      for (var ci=0;ci<this.rivals.length;ci++){
+        var rvv=this.rivals[ci]; var rt=(rvv.progress%this.course.length)/this.course.length;
+        var rpos = placeOnCourse(this.rivalMeshes[ci], this.course.sampler, rt, rvv.lane, this.halfWidth, 0);
+        var d = rpos.distanceTo(playerPos);
+        if (d<2.6){ this.speed*=0.93; rvv.progress-=4; this.scrapeFlash=1; rvv.laneTarget=this.steerX>rvv.lane?Math.max(0.08,rvv.lane-0.3):Math.min(0.92,rvv.lane+0.3); }
+      }
+      if (this.scrapeFlash>0.02){ this.playerMesh.userData.bodyMat.emissive.setHex(0xffffff); this.playerMesh.userData.bodyMat.emissiveIntensity=this.scrapeFlash*0.8; }
+      else this.playerMesh.userData.bodyMat.emissiveIntensity=0;
+      this.scrapeFlash *= Math.pow(0.02, dt);
+
+      if (this.progress>=this.TOTAL) finishActive();
+      var tang = this.course.sampler.tangent(playerT);
+      updateChaseCam(playerPos, tang, 9, 4.4, 8, dt);
+    },
+    hud:function(){ leftLabel.textContent='Lap'; leftVal.textContent=Math.min(this.lapIndex+1,this.LAPS)+' / '+this.LAPS; rightLabel.textContent='Position'; rightVal.textContent=ordinal(this.rank); },
+    finish:function(){
+      var rg = rankAndGap(this.progress, this.rivals);
+      finishTitle.textContent = rg.rank===1?'Chequered flag — you win':'Race over';
+      finishBig.textContent = ordinal(rg.rank)+' place';
+      finishLine.textContent = 'Finished after '+this.LAPS+' laps';
+      renderStandings(rg.field);
+    }
+  };
+
+  // ============================================================
+  // Generic builder for an open (point-to-point) course game
+  // ============================================================
+  function buildOpenCourse(points, halfWidth, surfaceColor, groundColor, sunHex, fogColor){
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(fogColor);
+    scene.fog = new THREE.Fog(fogColor, 60, 240);
+    addStandardLights(scene, sunHex);
+    buildGround(scene, 900, groundColor);
+    var curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.5);
+    var sampler = curveSampler(curve);
+    var length = curve.getLength();
+    buildCourseSurface(scene, curve, sampler, 220, halfWidth, surfaceColor, 0.92);
+    return { scene:scene, curve:curve, sampler:sampler, length:length };
+  }
+
+  // ============================================================
+  // GAME: River Row Sprint
+  // ============================================================
+  var Row = {
+    key:'row', title:'River Row Sprint', maxSpeed:34,
+    startText:'Three rivals, one river. Drag left/right to steer your boat, scrub the mouse back and forth fast to paddle. Dodge logs, graze a buoy for a kick of speed.',
+    halfWidth:11,
+    build:function(){
+      var pts=[[0,0,0],[8,0,60],[-6,0,130],[10,0,200],[-4,0,270],[6,0,340],[0,0,400]].map(function(p){return new THREE.Vector3(p[0],p[1],p[2]);});
+      var c = buildOpenCourse(pts, this.halfWidth, 0x2a6f8f, 0x163a24, 0xfff2d0, 0x6fa8c9);
+      scatterDecor(c.scene, c.sampler, 220, this.halfWidth, makeTree, 16);
+      return c;
+    },
+    initRound:function(course){
+      this.course = course; this.speed=10; this.steerX=0.5; this.progress=0;
+      this.rivals=[{name:'Marin',base:15,phase:0.4,progress:4},{name:'Coxley',base:16.5,phase:1.6,progress:8},{name:'Fathom',base:14,phase:2.6,progress:2}];
+      this.playerMesh = createBoat(cssVar('--accent')||'#ff3d81'); course.scene.add(this.playerMesh);
+      this.rivalMeshes = [0xffa552,0x8ad1ff,0xc6ea7a].map(function(c){ var m=createBoat(c); course.scene.add(m); return m; });
+      this.obstacles=[];
+      for (var i=0;i<14;i++){
+        var t = 0.08+Math.random()*0.86, lane=0.1+Math.random()*0.8, type = Math.random()<0.6?'log':'buoy';
+        var mesh = type==='log' ? makeLog() : makeBuoy(0xffcf3f);
+        var pos = placeOnCourse(mesh, course.sampler, t, lane, this.halfWidth, 0);
+        course.scene.add(mesh);
+        this.obstacles.push({ t:t, distAlong:t*course.length, lane:lane, type:type, hit:false, mesh:mesh });
+      }
+      this.TOTAL = course.length;
+    },
+    onStroke:function(s){ this.speed = Math.min(this.maxSpeed, this.speed + s*5.6); },
+    update:function(dt, now){
+      this.speed *= Math.pow(0.58, dt); this.speed = Math.max(0, this.speed-2.2*dt);
+      if (mouse.haveInput) this.steerX += (mouse.steerTarget-this.steerX)*Math.min(1,dt*6.5);
+      this.steerX = Math.max(0.03, Math.min(0.97, this.steerX));
+      this.progress = Math.min(this.progress+this.speed*dt, this.TOTAL);
+      for (var i=0;i<this.rivals.length;i++){
+        var rv=this.rivals[i]; var band=Math.max(-8,Math.min(8,(this.progress-rv.progress)*0.4));
+        rv.progress = Math.min(rv.progress+Math.max(6,rv.base+band+Math.sin(now*0.0005+rv.phase)*2.2)*dt, this.TOTAL);
+      }
+      var rg = rankAndGap(this.progress, this.rivals); this.rank=rg.rank; this.gapAhead=rg.gapAhead;
+
+      var t = Math.min(1, this.progress/this.course.length);
+      var playerPos = placeOnCourse(this.playerMesh, this.course.sampler, t, this.steerX, this.halfWidth, 0);
+      for (var ci=0;ci<this.rivals.length;ci++){
+        var rvv=this.rivals[ci]; var rt=Math.min(1, rvv.progress/this.course.length);
+        placeOnCourse(this.rivalMeshes[ci], this.course.sampler, rt, 0.3+ci*0.25, this.halfWidth, 0);
+      }
+      for (var j=0;j<this.obstacles.length;j++){
+        var ob=this.obstacles[j]; if (ob.hit) continue;
+        if (Math.abs(ob.distAlong-this.progress)<2.5 && ob.mesh.position.distanceTo(playerPos)<2.3){
+          ob.hit=true;
+          if (ob.type==='log'){ this.speed*=0.5; showToast('Clipped a log!'); ob.mesh.material.color.set(0x443322); }
+          else { this.speed=Math.min(this.maxSpeed,this.speed+6); showToast('Buoy boost!'); ob.mesh.visible=false; }
+        }
+      }
+      if (this.progress>=this.TOTAL) finishActive();
+      var tang = this.course.sampler.tangent(t);
+      updateChaseCam(playerPos, tang, 7, 3.4, 7, dt);
+    },
+    hud:function(){ leftLabel.textContent='Distance'; leftVal.textContent=Math.round(this.progress)+' / '+Math.round(this.TOTAL)+'m'; rightLabel.textContent='Position'; rightVal.textContent=ordinal(this.rank); },
+    finish:function(){
+      var rg = rankAndGap(this.progress, this.rivals);
+      finishTitle.textContent = rg.rank===1?'First to the flag':'Race over';
+      finishBig.textContent = ordinal(rg.rank)+' place';
+      finishLine.textContent = 'Finished the sprint';
+      renderStandings(rg.field);
+    }
+  };
+
+  // ============================================================
+  // GAME: Slope Rush (Ski)
+  // ============================================================
+  var Ski = {
+    key:'ski', title:'Slope Rush', maxSpeed:52,
+    startText:'Carve down the mountain against two rivals. Drag left/right to lean into a turn, scrub the mouse back and forth to pole-push for a burst of speed. Clip a tree or rock and you spin out.',
+    halfWidth:15,
+    build:function(){
+      var pts=[[0,80,0],[10,65,70],[-8,50,140],[6,35,210],[-10,20,280],[4,8,350],[0,0,420]].map(function(p){return new THREE.Vector3(p[0],p[1],p[2]);});
+      var c = buildOpenCourse(pts, this.halfWidth, 0xe7eefb, 0xcfe0f2, 0xffffff, 0xcfe3f5);
+      scatterDecor(c.scene, c.sampler, 220, this.halfWidth, makeTree, 20);
+      return c;
+    },
+    initRound:function(course){
+      this.course = course; this.speed=14; this.steerX=0.5; this.progress=0; this.crashFlash=0;
+      this.rivals=[{name:'Powder',base:24,phase:0.7,progress:5},{name:'Frostbyte',base:26,phase:2.1,progress:9}];
+      this.playerMesh = createSkier(cssVar('--accent')||'#ff3d81'); course.scene.add(this.playerMesh);
+      this.rivalMeshes = [0x8a6bff,0xff8ec6].map(function(c){ var m=createSkier(c); course.scene.add(m); return m; });
+      this.obstacles=[];
+      for (var i=0;i<22;i++){
+        var t=0.08+Math.random()*0.86, lane=0.08+Math.random()*0.84, type=Math.random()<0.65?'tree':'rock';
+        var mesh = type==='tree'?makeTree():makeRock();
+        var pos = placeOnCourse(mesh, course.sampler, t, lane, this.halfWidth, 0);
+        course.scene.add(mesh);
+        this.obstacles.push({ t:t, distAlong:t*course.length, type:type, hit:false, mesh:mesh });
+      }
+      this.TOTAL = course.length;
+    },
+    onStroke:function(s){ this.speed = Math.min(this.maxSpeed, this.speed + s*8.4); },
+    update:function(dt, now){
+      this.speed += 4*dt; // gravity trickle
+      this.speed *= Math.pow(0.72, dt); this.speed = Math.max(0, this.speed - 1.4*dt);
+      if (mouse.haveInput) this.steerX += (mouse.steerTarget-this.steerX)*Math.min(1,dt*7);
+      var hitWall = this.steerX<=0.03||this.steerX>=0.97;
+      this.steerX = Math.max(0.02, Math.min(0.98, this.steerX));
+      if (hitWall) this.speed *= Math.pow(0.85, dt*60);
+      this.progress = Math.min(this.progress+this.speed*dt, this.TOTAL);
+      for (var i=0;i<this.rivals.length;i++){
+        var rv=this.rivals[i]; var band=Math.max(-10,Math.min(10,(this.progress-rv.progress)*0.45));
+        rv.progress = Math.min(rv.progress+Math.max(9,rv.base+band+Math.sin(now*0.0005+rv.phase)*3)*dt, this.TOTAL);
+      }
+      var rg = rankAndGap(this.progress, this.rivals); this.rank=rg.rank; this.gapAhead=rg.gapAhead;
+
+      var t = Math.min(1, this.progress/this.course.length);
+      var playerPos = placeOnCourse(this.playerMesh, this.course.sampler, t, this.steerX, this.halfWidth, (0.5-this.steerX)*0.3);
+      for (var ci=0;ci<this.rivals.length;ci++){
+        var rvv=this.rivals[ci]; var rt=Math.min(1, rvv.progress/this.course.length);
+        placeOnCourse(this.rivalMeshes[ci], this.course.sampler, rt, 0.35+ci*0.3, this.halfWidth, 0);
+      }
+      for (var j=0;j<this.obstacles.length;j++){
+        var ob=this.obstacles[j]; if (ob.hit) continue;
+        if (Math.abs(ob.distAlong-this.progress)<2.5 && ob.mesh.position.distanceTo(playerPos)<1.6){
+          ob.hit=true;
+          if (ob.type==='tree'){ this.speed*=0.3; this.crashFlash=1; showToast('Yard sale!'); }
+          else { this.speed*=0.75; showToast('Mogul bump'); }
+        }
+      }
+      this.crashFlash *= Math.pow(0.05, dt);
+      this.playerMesh.userData.bodyMat.emissiveIntensity = this.crashFlash*0.9;
+      this.playerMesh.userData.bodyMat.emissive.setHex(0xffffff);
+      if (this.progress>=this.TOTAL) finishActive();
+      var tang = this.course.sampler.tangent(t);
+      updateChaseCam(playerPos, tang, 6, 3.2, 6, dt);
+    },
+    hud:function(){ leftLabel.textContent='Distance'; leftVal.textContent=Math.round(this.progress)+' / '+Math.round(this.TOTAL)+'m'; rightLabel.textContent='Position'; rightVal.textContent=ordinal(this.rank); },
+    finish:function(){
+      var rg = rankAndGap(this.progress, this.rivals);
+      finishTitle.textContent = rg.rank===1?'First down the mountain':'Run over';
+      finishBig.textContent = ordinal(rg.rank)+' place';
+      finishLine.textContent = 'Finished the run';
+      renderStandings(rg.field);
+    }
+  };
+
+  // ============================================================
+  // GAME: Slalom Jet Ski
+  // ============================================================
+  var Jet = {
+    key:'jet', title:'Slalom Jet Ski', maxSpeed:46, GATES:14,
+    startText:'Weave through 14 buoy gates against two rivals. Drag left/right to steer, scrub the mouse back and forth to gun the throttle. Thread a gate clean for a speed kick — miss one and the clock bites back.',
+    halfWidth:13,
+    build:function(){
+      var pts=[[0,0,0],[14,0,70],[-10,0,140],[16,0,210],[-12,0,280],[8,0,350],[0,0,430]].map(function(p){return new THREE.Vector3(p[0],p[1],p[2]);});
+      var c = buildOpenCourse(pts, this.halfWidth, 0x1c5f8f, 0x12405f, 0xdfefff, 0x2d6e92);
+      scatterDecor(c.scene, c.sampler, 220, this.halfWidth, makeStandingStone, 8);
+      return c;
+    },
+    initRound:function(course){
+      this.course = course; this.speed=10; this.steerX=0.5; this.progress=0; this.penalty=0; this.gatesHit=0;
+      this.rivals=[{name:'Breaker',base:20,phase:0.3,progress:4},{name:'Riptide',base:21.5,phase:1.9,progress:7}];
+      this.playerMesh = createJetski(cssVar('--accent')||'#ff3d81'); course.scene.add(this.playerMesh);
+      this.rivalMeshes = [0xffa552,0x8ad1ff].map(function(c){ var m=createJetski(c); course.scene.add(m); return m; });
+      this.gates=[];
+      for (var i=0;i<this.GATES;i++){
+        var t = (i+1)/(this.GATES+1), side = i%2===0?0.28:0.72;
+        var mesh = makeGateBuoy(0xffcf3f);
+        placeOnCourse(mesh, course.sampler, t, side, this.halfWidth, 0);
+        course.scene.add(mesh);
+        this.gates.push({ t:t, distAlong:t*course.length, side:side, cleared:false, missed:false, mesh:mesh });
+      }
+      this.TOTAL = course.length;
+    },
+    onStroke:function(s){ this.speed = Math.min(this.maxSpeed, this.speed + s*7.2); },
+    update:function(dt, now){
+      this.speed *= Math.pow(0.6, dt); this.speed = Math.max(0, this.speed-3*dt);
+      if (mouse.haveInput) this.steerX += (mouse.steerTarget-this.steerX)*Math.min(1,dt*7);
+      this.steerX = Math.max(0.02, Math.min(0.98, this.steerX));
+      this.progress = Math.min(this.progress+this.speed*dt, this.TOTAL);
+      for (var i=0;i<this.rivals.length;i++){
+        var rv=this.rivals[i]; var band=Math.max(-9,Math.min(9,(this.progress-rv.progress)*0.4));
+        rv.progress = Math.min(rv.progress+Math.max(8,rv.base+band+Math.sin(now*0.0005+rv.phase)*2.5)*dt, this.TOTAL);
+      }
+      var rg = rankAndGap(this.progress, this.rivals); this.rank=rg.rank; this.gapAhead=rg.gapAhead;
+
+      for (var g=0; g<this.gates.length; g++){
+        var gate=this.gates[g]; if (gate.cleared||gate.missed) continue;
+        var delta = gate.distAlong - this.progress;
+        if (delta < -3){
+          gate.missed=true; this.penalty+=2; this.speed*=0.7; showToast('Missed the gate! +2s');
+          gate.mesh.userData.ball.material.color.set(0x8a3b3b); gate.mesh.userData.ball.material.emissive.set(0x3a1515);
+          continue;
+        }
+        if (Math.abs(delta)<2.2 && Math.abs(this.steerX-gate.side)<0.14){
+          gate.cleared=true; this.gatesHit++; this.speed=Math.min(this.maxSpeed,this.speed+5.5); showToast('Clean gate!');
+          gate.mesh.userData.ball.material.color.set(0x5bd68a); gate.mesh.userData.ball.material.emissive.set(0x1a5c36);
+        }
+      }
+      var t = Math.min(1, this.progress/this.course.length);
+      var playerPos = placeOnCourse(this.playerMesh, this.course.sampler, t, this.steerX, this.halfWidth, (0.5-this.steerX)*0.25);
+      for (var ci=0;ci<this.rivals.length;ci++){
+        var rvv=this.rivals[ci]; var rt=Math.min(1, rvv.progress/this.course.length);
+        placeOnCourse(this.rivalMeshes[ci], this.course.sampler, rt, 0.3+ci*0.4, this.halfWidth, 0);
+      }
+      if (this.progress>=this.TOTAL) finishActive();
+      var tang = this.course.sampler.tangent(t);
+      updateChaseCam(playerPos, tang, 7, 3.6, 10, dt);
+    },
+    hud:function(){ leftLabel.textContent='Gates'; leftVal.textContent=this.gatesHit+' / '+this.GATES; rightLabel.textContent='Position'; rightVal.textContent=ordinal(this.rank); },
+    finish:function(){
+      var rg = rankAndGap(this.progress, this.rivals);
+      finishTitle.textContent = rg.rank===1?'Slalom champion':'Race over';
+      finishBig.textContent = ordinal(rg.rank)+' place';
+      finishLine.textContent = this.gatesHit+'/'+this.GATES+' gates · +'+this.penalty.toFixed(0)+'s penalty';
+      renderStandings(rg.field);
+    }
+  };
+
+  // ============ game switch machinery ============
+  var GAMES = { car:Car, row:Row, ski:Ski, jet:Jet };
+  var active = null;
+  var lastFrame = performance.now();
+
+  function startGame(key){
+    active = GAMES[key];
+    if (!active.course) active.course = active.build();
+    active.initRound(active.course);
+    gameName.textContent = active.title;
+    startTitle.textContent = active.title;
+    startText.textContent = active.startText;
+    hub.style.display='none'; rig.classList.add('show');
+    finishOverlay.hidden = true;
+    startOverlay.hidden = false;
+    active.running = false;
+    setPlaying(false);
+    camera.position.set(active.course.scene.position.x, 14, -20);
+    resize();
+  }
+  function finishActive(){
+    active.running = false;
+    setPlaying(false);
+    active.finish();
+    finishOverlay.hidden = false;
+  }
+  function backToHub(){
+    active = null;
+    setPlaying(false);
+    rig.classList.remove('show'); hub.style.display='';
+  }
+
+  document.querySelectorAll('.card button').forEach(function(b){
+    b.addEventListener('click', function(){ startGame(b.getAttribute('data-game')); });
+  });
+  startBtn.addEventListener('click', function(){
+    startOverlay.hidden = true;
+    active.running = true;
+    setPlaying(true);
+    mouse.lastX=null; mouse.smoothV=0; mouse.sign=0; mouse.peak=0;
+  });
+  retryBtn.addEventListener('click', function(){
+    finishOverlay.hidden = true;
+    // rebuild a fresh scene for this course so vehicles/obstacles from the
+    // last round don't pile up, then start a clean round on it
+    active.course = active.build();
+    startGame(active.key);
+  });
+  exitBtn.addEventListener('click', backToHub);
+  backBtn.addEventListener('click', backToHub);
+
+  function frame(now){
+    requestAnimationFrame(frame);
+    var dt = Math.min(0.05, (now-lastFrame)/1000);
+    lastFrame = now;
+    if (!active) return;
+    if (active.running) active.update(dt, now);
+    renderer.render(active.course.scene, camera);
+    active.hud();
+    var wheelDeg = (active.steerX-0.5)*220;
+    dialGroup.setAttribute('transform', 'rotate('+wheelDeg.toFixed(1)+' 26 26)');
+    powerFlash *= Math.pow(0.1, dt);
+    var speedFrac = Math.max(powerFlash, Math.min(1, active.speed/active.maxSpeed));
+    powerFill.style.height = Math.round(speedFrac*100)+'%';
+  }
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
